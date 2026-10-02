@@ -19,6 +19,24 @@ Where Claude Code can draw real pixels (Ghostty, kitty or WezTerm with nothing i
 
 ![A photo, and the same photo in quadrant cells at 64×23 cells](design/cells-preview.png)
 
+### Real pixels inside herdr
+
+herdr renders kitty graphics, but Claude Code decides whether to draw pixels by asking the terminal its name and accepting only kitty or ghostty. herdr answers `libghostty`, so Claude Code shows images as text there. Set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` in herdr panes to turn pixels on; the Lightbox follows the same variable. In `~/.zshrc`:
+
+```sh
+if [[ -n $HERDR_ENV && $TERM_PROGRAM == ghostty ]]; then
+  export CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1
+fi
+```
+
+### Proportions
+
+A terminal stretches a picture to fill the cells it is given, so the Lightbox needs to know how tall a cell is against its width. The `cellAspect` option says so: about 2.1 for most fonts, more with taller lines (Ghostty's `adjust-cell-height`). JetBrains Mono at 14 points with `adjust-cell-height = 10%` is 2.5. Set it in `~/.claude/settings.json`:
+
+```json
+"pluginConfigs": { "lightbox": { "options": { "cellAspect": 2.5 } } }
+```
+
 ## Using it
 
 - `/lightbox` opens the pane. `/lightbox <path>` shows a file, and `/lightbox clear` empties the reel.

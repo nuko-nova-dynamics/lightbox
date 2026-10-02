@@ -25,6 +25,14 @@
         "pixels"
       ],
       "default": "auto"
+    },
+    "cellAspect": {
+      "type": "number",
+      "title": "Cell height to width",
+      "description": "How many times taller than wide one terminal cell is, so pictures keep their proportions. About 2.1 for most fonts; more with taller lines, such as Ghostty's adjust-cell-height.",
+      "min": 1,
+      "max": 4,
+      "default": 2.1
     }
   }
 }

@@ -114,17 +114,20 @@ export function pngSize(base64: string): { width: number; height: number } | nul
   return width > 0 && height > 0 ? { width, height } : null;
 }
 
-// A terminal cell is about twice as tall as it is wide.
-const CELL_ASPECT = 2.1;
+// A terminal cell is about twice as tall as it is wide; fonts and line spacing move it.
+export const CELL_ASPECT = 2.1;
 
-/** The largest box of cells within the limits that keeps the picture's proportions. */
-export function fit(width: number, height: number, maxColumns: number, maxRows: number): { columns: number; rows: number } {
+/**
+ * The largest box of cells within the limits that keeps the picture's proportions, for cells `aspect` times
+ * taller than wide. The terminal stretches a picture to fill its box, so a wrong aspect distorts it.
+ */
+export function fit(width: number, height: number, maxColumns: number, maxRows: number, aspect = CELL_ASPECT): { columns: number; rows: number } {
   const clamp = (n: number, hi: number) => Math.max(1, Math.min(hi, Math.round(n)));
   let columns = Math.min(maxColumns, 255);
-  let rows = (columns * height) / width / CELL_ASPECT;
+  let rows = (columns * height) / width / aspect;
   if (rows > maxRows) {
     rows = maxRows;
-    columns = (rows * CELL_ASPECT * width) / height;
+    columns = (rows * aspect * width) / height;
   }
   return { columns: clamp(columns, Math.min(maxColumns, 255)), rows: clamp(rows, Math.min(maxRows, 255)) };
 }

@@ -9,7 +9,7 @@ import { atom, read, update } from "claude-code";
 import type { ElementConstructor, EngineInterface, ImageProps, RasterProps, Register } from "claude-code";
 import type { LightboxShot } from "../types";
 import { decodeBase64, quadrantCells, readBmp } from "./cells.ts";
-import { absolutePath, ago, basename, decodedSize, fit, formatLabel, imageBlocks, imagePathsIn, isPng, mimeForPath, pastedImagePaths, pngSize, toolLabel } from "./images.ts";
+import { absolutePath, ago, basename, CELL_ASPECT, decodedSize, fit, formatLabel, imageBlocks, imagePathsIn, isPng, mimeForPath, pastedImagePaths, pngSize, toolLabel } from "./images.ts";
 
 type Api = EngineInterface;
 type Call = { readonly tool: string; readonly [field: string]: unknown };
@@ -77,6 +77,7 @@ let autoOpen = true;
 let canOpen = false;
 let rendererOption = "auto";
 let drawsPixels = false;
+let cellAspect = CELL_ASPECT;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0]?.slice(0, 160) ?? "";
 const newId = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`);
@@ -281,10 +282,15 @@ async function openShot($: Api, shot: LightboxShot): Promise<void> {
   await $.process.run(["sh", "-c", 'f="$(mktemp "${TMPDIR:-/tmp}/lightbox.XXXXXX")"; base64 -d > "$f.png" && open "$f.png"; rm -f "$f"'], { stdin: picture.full });
 }
 
-/** Whether Claude Code draws real pixels here: kitty graphics outside a multiplexer, unless the option says otherwise. */
+/**
+ * Whether Claude Code draws real pixels here, unless the option says otherwise. Claude Code asks the terminal
+ * and draws only for kitty or ghostty by name, so inside a multiplexer that renders kitty graphics (herdr names
+ * itself libghostty) it needs CLAUDE_CODE_FORCE_TERMINAL_IMAGES; without it, a multiplexer means cells.
+ */
 async function choosePixels($: Api): Promise<boolean> {
   if (rendererOption === "pixels") return true;
   if (rendererOption === "cells") return false;
+  if (await $.env.get("CLAUDE_CODE_FORCE_TERMINAL_IMAGES")) return true;
   const term = (await $.env.get("TERM")) ?? "";
   const program = (await $.env.get("TERM_PROGRAM")) ?? "";
   const kitty = Boolean(await $.env.get("KITTY_WINDOW_ID"));
@@ -295,6 +301,8 @@ async function choosePixels($: Api): Promise<boolean> {
 export const register: Register = (on, options) => {
   autoOpen = options.autoOpen !== false;
   rendererOption = String(options.renderer ?? "auto");
+  const aspect = Number(options.cellAspect);
+  cellAspect = aspect >= 1 && aspect <= 4 ? aspect : CELL_ASPECT;
   // An explicit choice holds from the start; "auto" is settled at session start, from the terminal's environment.
   drawsPixels = rendererOption === "pixels";
 
@@ -415,10 +423,15 @@ export const register: Register = (on, options) => {
     if (!picture && shot.status !== "failed") $.clock.after(0, () => { void prepare($, shot.id); });
 
     const viewportRows = e.viewport?.rows ?? 40;
+    // A docked pane is shorter than the screen (the prompt and status sit below it): size to its body.
+    const bodyRows = e.props.scroll?.bodyRows ?? 0;
     const hasStrip = list.length > 1;
     const chrome = 2 + 2 + (shot.caption ? 2 : 0) + (hasStrip ? THUMB_ROWS + 3 : 0) + 3;
-    const maxRows = e.props.placement === "dock" ? Math.max(6, viewportRows - chrome - 4) : Math.max(6, Math.min(20, Math.floor(viewportRows * 0.5)));
-    const box = shot.width && shot.height ? fit(shot.width, shot.height, width, maxRows) : null;
+    const maxRows =
+      e.props.placement === "dock"
+        ? Math.max(6, (bodyRows > 0 ? bodyRows : viewportRows - 4) - chrome)
+        : Math.max(6, Math.min(20, Math.floor(viewportRows * 0.5)));
+    const box = shot.width && shot.height ? fit(shot.width, shot.height, width, maxRows, cellAspect) : null;
 
     const sizeLabel = shot.originalWidth && shot.originalHeight ? `${shot.originalWidth}×${shot.originalHeight}` : shot.width ? `${shot.width}×${shot.height}` : "";
     const meta = [shot.origin, ago(Date.now() - shot.at), sizeLabel, formatLabel(shot.mime)].filter(Boolean).join(" · ");
@@ -446,7 +459,7 @@ export const register: Register = (on, options) => {
     const thumbnail = (s: LightboxShot) => {
       const thumb = pixels.get(s.id)?.thumb;
       if (!thumb || !s.width || !s.height) return <Text dimColor>…</Text>;
-      const size = fit(s.width, s.height, THUMB_COLUMNS, THUMB_ROWS);
+      const size = fit(s.width, s.height, THUMB_COLUMNS, THUMB_ROWS, cellAspect);
       if (Image) return <Image key={`i-${s.id}`} source={{ png: thumb }} columns={size.columns} rows={size.rows} alt={s.title} />;
       if (!Raster) return <Text dimColor wrap="truncate-end">{s.title}</Text>;
       const cells = cellCache.get(`${s.id}:thumb:${size.columns}x${size.rows}`);
@@ -456,7 +469,8 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column" paddingX={1}>
-        <Box flexDirection="row" justifyContent="space-between">
+        {/* Clear of the close mark Claude Code draws in the pane's top right corner. */}
+        <Box flexDirection="row" justifyContent="space-between" paddingRight={2}>
           <Text bold wrap="truncate-middle">{shot.title}</Text>
           <Text dimColor>{index + 1} of {list.length}</Text>
         </Box>

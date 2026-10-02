@@ -141,3 +141,30 @@ export function ago(ms: number): string {
   if (s < 3600) return `${Math.round(s / 60)} min ago`;
   return `${Math.round(s / 3600)} h ago`;
 }
+
+const FORMAT_LABELS: Record<string, string> = {
+  "image/png": "PNG",
+  "image/jpeg": "JPEG",
+  "image/gif": "GIF",
+  "image/webp": "WebP",
+  "image/heic": "HEIC",
+  "image/heif": "HEIF",
+  "image/avif": "AVIF",
+  "image/tiff": "TIFF",
+  "image/bmp": "BMP",
+  "image/svg+xml": "SVG"
+};
+
+/** A MIME type as people name the format: `image/heic` → HEIC. */
+export function formatLabel(mime: string): string {
+  return FORMAT_LABELS[mime] ?? mime.replace(/^image\//, "").toUpperCase();
+}
+
+/** Files pasted into a prompt, which Claude Code notes as `[Image: source: /path]`; the path may hold spaces. */
+export function pastedImagePaths(text: string): string[] {
+  const out: string[] = [];
+  const re = /\[Image: source: ([^\]\n]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(String(text || "")))) if (m[1]) out.push(m[1].trim());
+  return out;
+}

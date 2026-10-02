@@ -16,6 +16,9 @@ export type LightboxShot = {
   /** Size of the prepared picture, in pixels. */
   width?: number;
   height?: number;
+  /** Size of the original image, in pixels. */
+  originalWidth?: number;
+  originalHeight?: number;
   status: "pending" | "ready" | "failed";
   /** Why it could not be shown. */
   note?: string;
@@ -26,6 +29,8 @@ declare module "claude-code" {
     lightbox: {
       shots: LightboxShot[];
       current: number;
+      /** A new image arrived while the pane could not be drawn; the band above the prompt says so. */
+      waiting: boolean;
     };
   }
 }

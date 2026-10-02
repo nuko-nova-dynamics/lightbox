@@ -2,7 +2,10 @@
   "name": "lightbox",
   "version": "0.1.0",
   "description": "Shows every image the session reads, receives or creates in a pane beside the conversation: PNG, JPEG, GIF, WebP, HEIC, AVIF, TIFF, BMP and SVG.",
-  "author": { "name": "Nuko Nova Dynamics", "email": "hello@nukonova.com" },
+  "author": {
+    "name": "Nuko Nova Dynamics",
+    "email": "hello@nukonova.com"
+  },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -11,6 +14,17 @@
       "title": "Open on new images",
       "description": "Open the Lightbox pane when a new image arrives. Off, a toast says one arrived.",
       "default": true
+    },
+    "renderer": {
+      "type": "string",
+      "title": "How pictures are drawn",
+      "description": "auto: real pixels where Claude Code draws them, colored character cells elsewhere (herdr, tmux, SSH). cells: always cells. pixels: always the kitty graphics protocol.",
+      "options": [
+        "auto",
+        "cells",
+        "pixels"
+      ],
+      "default": "auto"
     }
   }
 }

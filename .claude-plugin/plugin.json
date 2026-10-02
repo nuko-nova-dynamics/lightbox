@@ -1,0 +1,16 @@
+{
+  "name": "lightbox",
+  "version": "0.1.0",
+  "description": "Shows every image the session reads, receives or creates in a pane beside the conversation: PNG, JPEG, GIF, WebP, HEIC, AVIF, TIFF, BMP and SVG.",
+  "author": { "name": "Nuko Nova Dynamics", "email": "hello@nukonova.com" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open on new images",
+      "description": "Open the Lightbox pane when a new image arrives. Off, a toast says one arrived.",
+      "default": true
+    }
+  }
+}

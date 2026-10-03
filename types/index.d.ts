@@ -11,6 +11,8 @@ export type LightboxShot = {
   mime: string;
   /** When it arrived, in milliseconds. */
   at: number;
+  /** Shared by images that arrived together (the first one's id); the strip shows them side by side. */
+  batch?: string;
   /** A line Claude attached when sending it. */
   caption?: string;
   /** Size of the prepared picture, in pixels. */
@@ -29,8 +31,10 @@ declare module "claude-code" {
     lightbox: {
       shots: LightboxShot[];
       current: number;
-      /** A new image arrived while the pane could not be drawn; the band above the prompt says so. */
-      waiting: boolean;
+      /** The person hid the strip above the prompt; a new image shows it again. */
+      hidden: boolean;
+      /** The strip is folded to one line: the person sent a message with no image since these arrived. */
+      folded: boolean;
     };
   }
 }

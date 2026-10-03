@@ -1,18 +1,27 @@
 {
   "name": "lightbox",
-  "version": "0.1.0",
-  "description": "Shows every image the session reads, receives or creates in a pane beside the conversation: PNG, JPEG, GIF, WebP, HEIC, AVIF, TIFF, BMP and SVG.",
+  "version": "0.2.0",
+  "description": "Shows the images you paste and the ones Claude reads, receives or creates in a small strip above the prompt: PNG, JPEG, GIF, WebP, HEIC, AVIF, TIFF, BMP and SVG.",
   "author": {
     "name": "Nuko Nova Dynamics",
     "email": "hello@nukonova.com"
   },
+  "homepage": "https://github.com/nuko-nova-dynamics/lightbox",
+  "repository": "https://github.com/nuko-nova-dynamics/lightbox",
   "license": "MIT",
+  "keywords": [
+    "mod",
+    "images",
+    "screenshots",
+    "terminal",
+    "heic"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "autoOpen": {
       "type": "boolean",
-      "title": "Open on new images",
-      "description": "Open the Lightbox pane when a new image arrives. Off, a toast says one arrived.",
+      "title": "Show new images",
+      "description": "Show the strip above the prompt again when a new image arrives, after you hid it. Off, a toast says one arrived.",
       "default": true
     },
     "renderer": {

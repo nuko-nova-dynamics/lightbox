@@ -24,6 +24,7 @@ function world(on: On, files: Record<string, number> = {}, seats = true) {
   const clock = mock.clock(on, { now: 1_000 });
   on("ui.open", () => ({ value: seats ? { isPlaced: true } : { isPlaced: false, reason: "narrow" } }) as any);
   on("ui.toast", () => ({ value: undefined }) as any);
+  on("ui.panes", () => ({ value: [] }) as any);
   on("session.cwd", () => ({ value: "/work" }));
   on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/me" : undefined }) as any);
   // A file exists when listed, with the given modification time.
@@ -51,57 +52,81 @@ function world(on: On, files: Record<string, number> = {}, seats = true) {
   return { converted, settle };
 }
 
-test("an image Claude reads opens the Lightbox and is drawn in pixels where the terminal can", PIXELS, async ($, on) => {
+test("an image Claude reads shows in the strip above the prompt, in pixels where the terminal can", PIXELS, async ($, on) => {
   const w = world(on);
   await $.tool.call({ tool: "Read", file_path: "/work/shot.png" } as any);
   await w.settle();
-  const ui = await $.ui.mount(PANE);
-  expect(await ui.find({ type: "Image" })).toBeDefined();
-  expect(await ui.find({ type: "Text", text: /shot\.png/ })).toBeDefined();
-  expect(await ui.find({ type: "Text", text: /read by Claude · just now · 4×2 · PNG/ })).toBeDefined();
-  await ui.unmount();
+  const band = await $.ui.mount(BAND);
+  expect(await band.find({ type: "Image" })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /shot\.png/ })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /read by Claude/ })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /just now · 4×2 · PNG/ })).toBeDefined();
+  await band.unmount();
 });
 
 test("inside a multiplexer the picture is drawn in quadrant cells", CELLS, async ($, on) => {
   const w = world(on);
   await $.tool.call({ tool: "mcp__shots__take_screenshot" } as any);
   await w.settle();
-  const ui = await $.ui.mount(PANE);
+  const band = await $.ui.mount(BAND);
   await w.settle();
-  expect(await ui.find({ type: "Raster" })).toBeDefined();
-  expect(await ui.find({ type: "Image" })).toBeUndefined();
+  expect(await band.find({ type: "Raster" })).toBeDefined();
+  expect(await band.find({ type: "Image" })).toBeUndefined();
   expect(w.converted.some((argv) => String(argv[2]).includes("bmp3"))).toBe(true);
-  await ui.unmount();
+  await band.unmount();
 });
 
-test("a HEIC is converted, and the meta line gives its original size and format", PIXELS, async ($, on) => {
+test("a HEIC is converted once, small, for the strip; the larger picture waits for the pane", PIXELS, async ($, on) => {
   const w = world(on, { "/work/IMG_0001.HEIC": 0 });
   await $.tool.call({ tool: "Read", file_path: "/work/IMG_0001.HEIC" } as any);
   await w.settle();
-  const ui = await $.ui.mount(PANE);
-  expect(await ui.find({ type: "Image" })).toBeDefined();
-  expect(await ui.find({ type: "Text", text: /4032×3024 · HEIC/ })).toBeDefined();
-  await ui.unmount();
+  const band = await $.ui.mount(BAND);
+  expect(await band.find({ type: "Image" })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /4032×3024 · HEIC/ })).toBeDefined();
+  const sides = () => w.converted.filter((argv) => argv[4] === "/work/IMG_0001.HEIC").map((argv) => [argv[5], argv[6]]);
+  expect(sides()).toEqual([["480", "image/heic"]]);
+  await band.unmount();
+  const pane = await $.ui.mount(PANE);
+  await w.settle();
+  expect(sides()).toEqual([["480", "image/heic"], ["1280", "image/heic"]]);
+  expect(await pane.find({ type: "Image" })).toBeDefined();
+  await pane.unmount();
+});
+
+test("images that arrive together show side by side in the strip", PIXELS, async ($, on) => {
+  const w = world(on, { "/work/a.png": 0, "/work/b.png": 0 });
+  await $.tool.call({ tool: "mcp__lightbox__show", path: "a.png" } as any);
+  await $.tool.call({ tool: "mcp__lightbox__show", path: "b.png" } as any);
+  await w.settle();
+  const band = await $.ui.mount(BAND);
+  expect(await band.findAll({ type: "Image" })).toHaveLength(2);
+  expect(await band.find({ type: "Text", text: /b\.png/ })).toBeDefined();
+  await band.unmount();
+});
+
+test("folding the strip leaves one line; a new image opens it again", PIXELS, async ($, on) => {
+  const w = world(on, { "/work/a.png": 0, "/work/b.png": 0 });
+  await $.tool.call({ tool: "mcp__lightbox__show", path: "a.png" } as any);
+  await w.settle();
+  const band = await $.ui.mount(BAND);
+  await $.ui.press({ plugin: "lightbox", key: "fold" });
+  expect(await band.find({ type: "Button", key: "expand" })).toBeDefined();
+  expect(await band.find({ type: "Button", key: "view" })).toBeUndefined();
+  await $.tool.call({ tool: "mcp__lightbox__show", path: "b.png" } as any);
+  await w.settle();
+  expect(await band.find({ type: "Button", key: "view" })).toBeDefined();
+  expect(await band.find({ type: "Button", key: "expand" })).toBeUndefined();
+  await band.unmount();
 });
 
 test("an image a command just wrote is captured; one it only mentions is not", PIXELS, async ($, on) => {
   const w = world(on, { "/work/new.png": Date.now(), "/work/old.png": 0 });
-  await $.tool.call({ tool: "Bash", command: "screencapture -x new.png && ls old.png" } as any);
-  await w.settle();
-  const ui = await $.ui.mount(PANE);
-  expect(await ui.find({ type: "Text", text: /new\.png/ })).toBeDefined();
-  expect(await ui.find({ type: "Text", text: /from screencapture/ })).toBeDefined();
-  expect(await ui.find({ type: "Text", text: /old\.png/ })).toBeUndefined();
-  await ui.unmount();
-});
-
-test("when the pane cannot seat, the band above the prompt says an image is waiting", PIXELS, async ($, on) => {
-  const w = world(on, {}, false);
-  await $.tool.call({ tool: "Read", file_path: "/work/shot.png" } as any);
+  await $.tool.call({ tool: "Bash", command: "cd /work && timeout 30 /usr/sbin/screencapture -x new.png && ls old.png" } as any);
   await w.settle();
   const band = await $.ui.mount(BAND);
-  expect(await band.find({ type: "Text", text: /shot\.png/ })).toBeDefined();
-  expect(await band.find({ type: "Text", text: /\/lightbox to view/ })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /new\.png/ })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /from screencapture/ })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /old\.png/ })).toBeUndefined();
   await band.unmount();
 });
 

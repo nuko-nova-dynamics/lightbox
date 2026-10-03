@@ -1,17 +1,36 @@
 # Lightbox
 
-A Claude Code mod that shows images in your terminal. Every image the session touches lands in a pane beside the conversation:
+A Claude Code mod that shows images in your terminal, in a small strip right above the prompt. Claude Code shows an image you paste as `[Image #1]`, and an image Claude reads or makes as nothing at all; the Lightbox draws them:
 
+- images you paste into a prompt, named `Image #1`, `Image #2` as the transcript names them
 - images Claude opens with the Read tool
 - screenshots and other images that tools return (Chrome DevTools, Peekaboo, simulator and computer-use tools)
-- image files a command or tool call just wrote: `screencapture`, `xcrun simctl io booted screenshot`, an image generator's output
+- image files a command or tool call just wrote: `screencapture`, `xcrun simctl io booted screenshot`, an image generator's output (but not Claude's own scratch files)
 - images Claude sends you on purpose with its `show` tool
-- images you paste into a prompt from a file (they join the reel quietly)
 - any file you open with `/lightbox path/to/image`
 
-It reads PNG, JPEG, GIF, WebP, HEIC/HEIF, AVIF, TIFF, BMP and SVG. Images other than small PNGs are converted with ImageMagick, or with `sips` on macOS when ImageMagick cannot decode a file, to a PNG no larger than 1280 pixels.
+It reads PNG, JPEG, GIF, WebP, HEIC/HEIF, AVIF, TIFF, BMP and SVG. Each image is decoded once into a PNG of at most 480 pixels for the strip: with `sips` first for HEIC on macOS, which is several times faster there, and ImageMagick first for everything else. The larger view gets a 1280-pixel picture only when you open it.
 
-![The Lightbox design](design/mockup.png)
+Requires Claude Code 2.1.288 or later.
+
+## Install
+
+```
+/plugin marketplace add nuko-nova-dynamics/marketplace
+/plugin install lightbox@nuko-nova-tools
+```
+
+## The strip
+
+- Images that arrive together, several pasted at once or sent at once, sit side by side, up to four. Each has a frame; the current one's is lit in its sender's color, cyan for yours and orange for Claude's.
+- Beside them: the current image's name, a dot for each image on the reel (the current one filled, batches spaced apart), who brought it in, when, its original size and its format.
+- `h` and `l` step through the images, `v` opens the larger view, `o` opens the image in Preview, `f` folds the strip and `x` hides it. Press ctrl+x then Tab to give the strip the keyboard; a click works without it.
+- When you send a message with no image, the strip folds to one line with its pictures a row tall. The next image opens it again.
+- `/lightbox` opens a folded or hidden strip and hides an open one. `/lightbox <path>` shows a file, `/lightbox view` opens the larger view, and `/lightbox clear` empties the reel.
+
+The larger view is a pane with the current image as large as the pane allows and thumbnails of the images around it; the strip steps aside while it shows. In it, `h` and `l` step, `o` opens in Preview, `r` reveals in Finder, `c` copies the path and `x` removes the image.
+
+Open and Reveal appear only on a Mac you are sitting at, not over SSH. The reel keeps the last 24 images per session, with pictures for the 12 most recent held in memory.
 
 ## How pictures are drawn
 
@@ -34,20 +53,14 @@ fi
 A terminal stretches a picture to fill the cells it is given, so the Lightbox needs to know how tall a cell is against its width. The `cellAspect` option says so: about 2.1 for most fonts, more with taller lines (Ghostty's `adjust-cell-height`). JetBrains Mono at 14 points with `adjust-cell-height = 10%` is 2.5. Set it in `~/.claude/settings.json`:
 
 ```json
-"pluginConfigs": { "lightbox": { "options": { "cellAspect": 2.5 } } }
+"pluginConfigs": { "lightbox@nuko-nova-tools": { "options": { "cellAspect": 2.5 } } }
 ```
 
-## Using it
+## Options
 
-- `/lightbox` opens the pane. `/lightbox <path>` shows a file, and `/lightbox clear` empties the reel.
-- In the pane, `h` and `l` step back and forward, `o` opens the image in Preview, `r` reveals it in Finder, `c` copies its path, and `x` removes it. Press ctrl+x then Tab, or click the pane, to give it the keyboard; the footer says so while it does not have it.
-- A strip of framed thumbnails under the picture shows the images around the current one, the current one outlined in cyan.
-- The header gives the file name and its place on the reel; the line under it says who brought the image in, when, its original size and its format.
-- The pane opens by itself when a new image arrives. When the terminal is too narrow for Claude Code to seat a pane unasked, a band above the prompt says an image is waiting instead. Turn auto-opening off with the `autoOpen` option, and a toast says an image arrived.
-
-Open and Reveal appear only on a Mac you are sitting at, not over SSH.
-
-The reel keeps the last 24 images per session, with pictures for the 12 most recent held in memory.
+- `autoOpen` (on by default): a new image shows the strip again after you hid it. Off, a toast says one arrived instead.
+- `renderer`: `auto`, `cells` or `pixels`, as above.
+- `cellAspect`: a cell's height against its width, as above.
 
 ## Developing
 
@@ -57,7 +70,7 @@ claude plugin test .
 claude --plugin-dir .        # a session that reloads the mod on save
 ```
 
-`hooks/register.tsx` is the mod. `hooks/images.ts` and `hooks/cells.ts` touch nothing outside it: formats, PNG headers, paths and layout, and the quadrant-cell renderer (a BMP reader and the fitting of two colors to each 2×2 block). `design/mockup.png` is the design the pane is built to.
+`hooks/register.tsx` is the mod. `hooks/images.ts` and `hooks/cells.ts` touch nothing outside it: formats, PNG headers, paths and layout, and the quadrant-cell renderer (a BMP reader and the fitting of two colors to each 2×2 block).
 
 ## License
 

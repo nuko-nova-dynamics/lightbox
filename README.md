@@ -43,10 +43,12 @@ Where Claude Code can draw real pixels (Ghostty, kitty or WezTerm with nothing i
 herdr renders kitty graphics, but Claude Code decides whether to draw pixels by asking the terminal its name and accepting only kitty or ghostty. herdr answers `libghostty`, so Claude Code shows images as text there. Set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` in herdr panes to turn pixels on; the Lightbox follows the same variable. In `~/.zshrc`:
 
 ```sh
-if [[ -n $HERDR_ENV && $TERM_PROGRAM == ghostty ]]; then
+if [[ -n $HERDR_ENV && -n $GHOSTTY_RESOURCES_DIR ]]; then
   export CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1
 fi
 ```
+
+Check for Ghostty with `GHOSTTY_RESOURCES_DIR`, not `TERM_PROGRAM`: herdr 0.9.3 and later set `TERM_PROGRAM=herdr` in every pane, so a `$TERM_PROGRAM == ghostty` test no longer matches. Claude Code reads the variable when it starts, so restart it from a new pane after changing this.
 
 ### Proportions
 

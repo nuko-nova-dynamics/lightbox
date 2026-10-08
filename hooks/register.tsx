@@ -245,6 +245,28 @@ function rowsOf(node: unknown): number {
   return inner + vertical + (props.borderStyle ? 2 : 0);
 }
 
+type Tone = "primary" | "neutral" | "danger";
+const TONE_COLOR: Record<Tone, string> = { primary: "suggestion", neutral: "inactive", danger: "error" };
+
+/**
+ * A button that looks like one: the label with a space either side, inside a rounded outline in its tone that turns
+ * to the text color under the pointer. The whole row inside the outline is the label, so it is easy to hit.
+ */
+function outlined(
+  Box: ElementConstructor<any>,
+  Button: ElementConstructor<any>,
+  id: string,
+  label: string,
+  onPress: () => void,
+  tone: Tone = "neutral"
+) {
+  return (
+    <Box key={`b-${id}`} borderStyle="round" borderColor={TONE_COLOR[tone]} hover={{ borderColor: "text" }} flexShrink={0}>
+      <Button key={id} plain label={` ${label} `} onPress={onPress} />
+    </Box>
+  );
+}
+
 /**
  * Drops what shots that left the reel held. Every shot on it keeps its small strip picture, so it can still be
  * shown; past the recent few it lets go of its larger picture, and of its original bytes once the strip's is made.
@@ -747,8 +769,9 @@ export const register: Register = (on, options) => {
         if (!cells) $.clock.after(0, () => { void renderCells($, s.id, size.columns, 1); });
         return cells ? <Raster key={`t-${s.id}`} columns={size.columns} rows={1} cells={cells} /> : null;
       };
-      // The keys and a dozen cells of name come first; tiny pictures fill what is left, none on a narrow band.
-      const keysWidth = (isFolded ? "expand".length : "larger".length) + 1 + "hide".length;
+      // The keys and a dozen cells of name come first; tiny pictures fill what is left, none on a narrow band. Each key
+      // is a framed `[ label ]`, four cells wider than its label.
+      const keysWidth = (isFolded ? "expand".length : "larger".length) + 4 + 1 + "hide".length + 4;
       let room = e.props.bodyColumns - 2 - 4 - keysWidth - 1 - 12;
       const fitting = shown.filter((s) => {
         const width = s.width && s.height ? fit(s.width, s.height, 8, 1, cellAspect).columns + 1 : 0;
@@ -764,9 +787,9 @@ export const register: Register = (on, options) => {
           {tint ? <Text color={tint} wrap="truncate-end">{shot.origin}</Text> : <Text dimColor wrap="truncate-end">{shot.origin}</Text>}
           <Text dimColor wrap="truncate-end">· {ago(Date.now() - shot.at)}</Text>
           <Box flexGrow={1} />
-          {isFolded ? <Button key="expand" plain dimColor label="expand" onPress={() => { void update($, folded, () => false); }} /> : null}
-          {isFolded ? null : <Button key="view" plain dimColor label="larger" onPress={openPane} />}
-          <Button key="hide" plain dimColor label="hide" onPress={() => { void update($, hidden, () => true); }} />
+          {isFolded ? <Button key="expand" variant="primary" label="expand" onPress={() => { void update($, folded, () => false); }} /> : null}
+          {isFolded ? null : <Button key="view" variant="primary" label="larger" onPress={openPane} />}
+          <Button key="hide" variant="secondary" label="hide" onPress={() => { void update($, hidden, () => true); }} />
         </Box>
       );
     }
@@ -794,26 +817,36 @@ export const register: Register = (on, options) => {
     const note = noteText && spare >= 2 ? noteText : undefined;
     const keyRows = spare - (note ? 1 : 0);
     type Key = { id: string; width: number; node: RenderChildren };
-    // Click targets: the label alone, dim until the pointer is over it.
-    const button = (id: string, label: string, onPress: () => void): Key => ({ id, width: label.length, node: <Button key={id} plain dimColor label={label} onPress={onPress} /> });
+    // Buttons that look like buttons: a rounded outline in the key's tone, brighter under the pointer, when there are
+    // three rows for a line of them; otherwise one row of framed `[ label ]` keys. Both are four cells wider than the
+    // label.
+    const isOutlined = keyRows >= 3;
+    const keyLines = isOutlined ? Math.floor(keyRows / 3) : keyRows;
+    const button = (id: string, label: string, onPress: () => void, tone: Tone = "neutral"): Key => ({
+      id,
+      width: label.length + 4,
+      node: isOutlined
+        ? outlined(Box, Button, id, label, onPress, tone)
+        : <Button key={id} variant={tone === "primary" ? "primary" : "secondary"} label={label} onPress={onPress} />
+    });
     let keys: Key[] = [
       ...(list.length > 1 ? [button("prev", "‹ prev", step(-1)), button("next", "next ›", step(1))] : []),
-      button("view", "larger", openPane),
+      button("view", "larger", openPane, "primary"),
       ...(canOpen && (shot.path || shot.copy) ? [button("open", "open", () => { void openShot($, shot); })] : []),
       button("fold", "fold", () => { void update($, folded, () => true); }),
       button("hide", "hide", () => { void update($, hidden, () => true); })
     ];
     const rowsFor = (items: Key[]) => {
       let lines = 1;
-      let used = -2;
+      let used = -1;
       for (const item of items) {
-        if (used + 2 + item.width > wordsWidth && used >= 0) { lines += 1; used = -2; }
-        used += 2 + item.width;
+        if (used + 1 + item.width > wordsWidth && used >= 0) { lines += 1; used = -1; }
+        used += 1 + item.width;
       }
       return lines;
     };
     for (const drop of ["fold", "open", "prev", "next", "view"]) {
-      if (rowsFor(keys) <= keyRows) break;
+      if (rowsFor(keys) <= keyLines) break;
       keys = keys.filter((k) => k.id !== drop);
     }
 
@@ -837,7 +870,7 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
           {note ? (shot.status === "failed" ? <Text color="red" wrap="truncate-end">{note}</Text> : <Text italic wrap="truncate-end">{note}</Text>) : null}
-          <Box flexDirection="row" columnGap={2} flexWrap="wrap">
+          <Box flexDirection="row" columnGap={1} flexWrap="wrap">
             {keys.map((k) => k.node)}
           </Box>
         </Box>
@@ -948,13 +981,13 @@ export const register: Register = (on, options) => {
         <Box marginTop={1}>
           <Text dimColor>{"─".repeat(width)}</Text>
         </Box>
-        <Box flexDirection="row" columnGap={3} flexWrap="wrap">
-          {list.length > 1 ? <Button key="prev" plain dimColor label="‹ prev" onPress={step(-1)} /> : null}
-          {list.length > 1 ? <Button key="next" plain dimColor label="next ›" onPress={step(1)} /> : null}
-          {canOpen && (shot.path || shot.copy) ? <Button key="open" plain dimColor label="open" onPress={() => { void openShot($, shot); }} /> : null}
-          {canOpen && shot.path ? <Button key="reveal" plain dimColor label="show in Finder" onPress={() => { void $.process.run(["open", "-R", shot.path!]); }} /> : null}
-          {shot.path ? <Button key="copy" plain dimColor label="copy path" onPress={() => { void $.ui.copy({ text: shot.path!, surface: e.surface }); }} /> : null}
-          <Button key="remove" plain dimColor label="remove" onPress={() => { void removeShot($, shot.id); }} />
+        <Box flexDirection="row" columnGap={1} flexWrap="wrap">
+          {list.length > 1 ? outlined(Box, Button, "prev", "‹ prev", step(-1)) : null}
+          {list.length > 1 ? outlined(Box, Button, "next", "next ›", step(1)) : null}
+          {canOpen && (shot.path || shot.copy) ? outlined(Box, Button, "open", "open", () => { void openShot($, shot); }, "primary") : null}
+          {canOpen && shot.path ? outlined(Box, Button, "reveal", "show in Finder", () => { void $.process.run(["open", "-R", shot.path!]); }) : null}
+          {shot.path ? outlined(Box, Button, "copy", "copy path", () => { void $.ui.copy({ text: shot.path!, surface: e.surface }); }) : null}
+          {outlined(Box, Button, "remove", "remove", () => { void removeShot($, shot.id); }, "danger")}
         </Box>
       </Box>
     );

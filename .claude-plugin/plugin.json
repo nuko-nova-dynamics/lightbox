@@ -1,6 +1,6 @@
 {
   "name": "lightbox",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Shows the images you paste and the ones Claude reads, receives or creates in a small strip above the prompt: PNG, JPEG, GIF, WebP, HEIC, AVIF, TIFF, BMP and SVG.",
   "author": {
     "name": "Nuko Nova Dynamics",

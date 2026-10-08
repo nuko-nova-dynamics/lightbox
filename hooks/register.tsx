@@ -642,6 +642,14 @@ export const register: Register = (on, options) => {
     // While the larger pane shows, the strip would only repeat it.
     if ((await $.ui.panes()).some((pane) => pane.id === PANE && pane.isShown)) return next(e);
     const { Box, Text, Button } = $.ui.resolve(e);
+    // What the mods after this one draw in the band (statusline-hud's rows) goes under the strip, so it stays
+    // closest to the prompt whichever mod runs first.
+    const withRest = async (strip: RenderChildren) => (
+      <Box flexDirection="column">
+        {strip}
+        {await next(e)}
+      </Box>
+    );
     const elements = $.ui.resolve(e) as unknown as { Image?: ElementConstructor<ImageProps>; Raster?: ElementConstructor<RasterProps> };
     const Image = e.surface === "terminal" && drawsPixels ? elements.Image : undefined;
     const Raster = e.surface === "terminal" && !drawsPixels ? elements.Raster : undefined;
@@ -727,7 +735,7 @@ export const register: Register = (on, options) => {
         room -= width;
         return true;
       });
-      return (
+      return withRest(
         <Box flexDirection="row" paddingX={1} paddingRight={4} columnGap={1}>
           {fitting.map(tiny)}
           <Text bold wrap="truncate-middle">{shot.title}</Text>
@@ -788,7 +796,7 @@ export const register: Register = (on, options) => {
       keys = keys.filter((k) => k.id !== drop);
     }
 
-    return (
+    return withRest(
       <Box flexDirection="row" paddingX={1} columnGap={2}>
         <Box flexDirection="row" columnGap={1} flexShrink={0}>
           {before > 0 ? <Box paddingTop={1}><Text dimColor>+{before}</Text></Box> : null}

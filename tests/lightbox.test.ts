@@ -20,12 +20,17 @@ const PIXELS = { options: { renderer: "pixels" } } as any;
 const CELLS = { options: { renderer: "cells" } } as any;
 
 /** The engine beneath the mod: a held clock, a pane that seats (or not), and tools that return images. */
-function world(on: On, files: Record<string, number> = {}, seats = true) {
+function world(on: On, files: Record<string, number> = {}, seats = true, below?: string) {
   const converted: string[][] = [];
   const clock = mock.clock(on, { now: 1_000 });
   on("ui.open", () => ({ value: seats ? { isPlaced: true } : { isPlaced: false, reason: "narrow" } }) as any);
   on("ui.toast", () => ({ value: undefined }) as any);
   on("ui.panes", () => ({ value: [] }) as any);
+  // The band beneath Lightbox: empty, as the engine draws it, or a line another mod drew.
+  on("ui.render", { component: "AbovePrompt" }, ($, e) => {
+    const { Box, Text } = $.ui.resolve(e);
+    return Box({ children: below ? Text({ children: below }) : undefined });
+  });
   on("session.cwd", () => ({ value: "/work" }));
   on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/me" : undefined }) as any);
   // A file exists when listed, with the given modification time.
@@ -233,5 +238,15 @@ test("a caption of several lines shows as one", PIXELS, async ($, on) => {
   await w.settle();
   const band = await $.ui.mount(BAND);
   expect(await band.find({ type: "Text", text: "first second third" })).toBeDefined();
+  await band.unmount();
+});
+
+test("what the mods after Lightbox draw in the band stays under the strip", PIXELS, async ($, on) => {
+  const w = world(on, {}, true, "drawn below");
+  await $.tool.call({ tool: "Read", file_path: "/work/shot.png" } as any);
+  await w.settle();
+  const band = await $.ui.mount(BAND);
+  expect(await band.find({ type: "Image" })).toBeDefined();
+  expect(await band.find({ type: "Text", text: /drawn below/ })).toBeDefined();
   await band.unmount();
 });

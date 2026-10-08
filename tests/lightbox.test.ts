@@ -249,4 +249,9 @@ test("what the mods after Lightbox draw in the band stays under the strip", PIXE
   expect(await band.find({ type: "Image" })).toBeDefined();
   expect(await band.find({ type: "Text", text: /drawn below/ })).toBeDefined();
   await band.unmount();
+  // A short band: the row beneath keeps its place and the strip shrinks to one line.
+  const short = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 4 } });
+  expect(await short.find({ type: "Text", text: /drawn below/ })).toBeDefined();
+  expect((await short.find({ type: "Image" }))?.props?.rows).toBe(1);
+  await short.unmount();
 });

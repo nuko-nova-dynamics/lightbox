@@ -226,6 +226,26 @@ let newest = "";
 let newestIndex = 0;
 
 /**
+ * About how many rows a tree takes: a Text or a string is one, a column adds its children, a row takes its tallest,
+ * borders and vertical padding add theirs. Wrapped text is not counted, so it can come out short.
+ */
+function rowsOf(node: unknown): number {
+  if (node === null || node === undefined || typeof node === "boolean") return 0;
+  if (typeof node === "string" || typeof node === "number") return 1;
+  if (Array.isArray(node)) return node.reduce((sum: number, child) => sum + rowsOf(child), 0);
+  const el = node as { type?: string; props?: Record<string, unknown>; children?: unknown[] };
+  if (el.type !== "Box") return 1;
+  const props = el.props ?? {};
+  if (props.display === "none") return 0;
+  if (typeof props.height === "number") return props.height;
+  const children = (el.children ?? []).map(rowsOf);
+  const inner = props.flexDirection === "column" ? children.reduce((a, b) => a + b, 0) : Math.max(0, ...children);
+  const padding = (n: unknown) => (typeof n === "number" ? n : 0);
+  const vertical = padding(props.paddingTop ?? props.paddingY ?? props.padding) + padding(props.paddingBottom ?? props.paddingY ?? props.padding);
+  return inner + vertical + (props.borderStyle ? 2 : 0);
+}
+
+/**
  * Drops what shots that left the reel held. Every shot on it keeps its small strip picture, so it can still be
  * shown; past the recent few it lets go of its larger picture, and of its original bytes once the strip's is made.
  */
@@ -643,11 +663,12 @@ export const register: Register = (on, options) => {
     if ((await $.ui.panes()).some((pane) => pane.id === PANE && pane.isShown)) return next(e);
     const { Box, Text, Button } = $.ui.resolve(e);
     // What the mods after this one draw in the band (statusline-hud's rows) goes under the strip, so it stays
-    // closest to the prompt whichever mod runs first.
-    const withRest = async (strip: RenderChildren) => (
+    // closest to the prompt whichever mod runs first; the strip fits in the rows it leaves.
+    const rest = await next(e);
+    const withRest = (strip: RenderChildren) => (
       <Box flexDirection="column">
         {strip}
-        {await next(e)}
+        {rest}
       </Box>
     );
     const elements = $.ui.resolve(e) as unknown as { Image?: ElementConstructor<ImageProps>; Raster?: ElementConstructor<RasterProps> };
@@ -671,7 +692,7 @@ export const register: Register = (on, options) => {
     // The band gets the rows the bottom slot has left above the prompt, fewer while a list of running agents
     // sits there too, and scrolls whatever is taller. The strip always fits them whole instead: smaller pictures
     // first, then fewer words and keys, then a single line.
-    const rows = e.props.maxRows;
+    const rows = Math.max(1, e.props.maxRows - rowsOf(rest));
     const maxRows = Math.max(1, Math.min(STRIP_ROWS, rows - 2));
     // The pictures share about three fifths of the width, each in its frame; the words take the rest.
     const budget = Math.floor(e.props.bodyColumns * 0.6) - (shown.length - 1);

@@ -24,7 +24,7 @@ Requires Claude Code 2.1.288 or later.
 
 - Images that arrive together, several pasted at once or sent at once, sit side by side, up to four. Each has a frame; the current one's is lit in its sender's color, cyan for yours and orange for Claude's.
 - Beside them: the current image's name, a dot for each image on the reel (the current one filled, batches spaced apart), who brought it in, when, its original size and its format.
-- `h` and `l` step through the images, `v` opens the larger view, `o` opens the image in Preview, `f` folds the strip and `x` hides it. Press ctrl+x then Tab to give the strip the keyboard; a click works without it.
+- Click `‹ prev` and `next ›` to step through the images, `larger` for the larger view, `open` to open the image in Preview, `fold` to fold the strip and `hide` to hide it. From the keyboard, ctrl+x then Tab moves to the controls and Enter presses one.
 - When you send a message with no image, the strip folds to one line with its pictures a row tall. The next image opens it again.
 - `/lightbox` opens a folded or hidden strip and hides an open one. `/lightbox <path>` shows a file, `/lightbox view` opens the larger view, and `/lightbox clear` empties the reel.
 
@@ -34,7 +34,7 @@ Open and Reveal appear only on a Mac you are sitting at, not over SSH. The reel 
 
 ## How pictures are drawn
 
-Where Claude Code can draw real pixels (Ghostty, kitty or WezTerm with nothing in between), the Lightbox uses them. Inside a multiplexer such as herdr, tmux or zellij, and over SSH, it draws the picture with Unicode quadrant blocks instead: each terminal cell shows two colors over a 2×2 grid, fitted to the pixels under it. That works in any terminal with true color. The `renderer` option forces either one: `pixels`, `cells`, or `auto` (the default).
+Where Claude Code can draw real pixels (Ghostty or kitty with nothing in between), the Lightbox uses them. Inside a multiplexer such as herdr, tmux or zellij, and over SSH, it draws the picture with Unicode quadrant blocks instead: each terminal cell shows two colors over a 2×2 grid, fitted to the pixels under it. That works in any terminal with true color. The `renderer` option forces either one: `pixels`, `cells`, or `auto` (the default). `pixels` only chooses which the Lightbox draws: where Claude Code itself does not draw pictures, an image then shows as its name.
 
 ![A photo, and the same photo in quadrant cells at 64×23 cells](design/cells-preview.png)
 
@@ -48,7 +48,7 @@ if [[ -n $HERDR_ENV && -n $GHOSTTY_RESOURCES_DIR ]]; then
 fi
 ```
 
-Check for Ghostty with `GHOSTTY_RESOURCES_DIR`, not `TERM_PROGRAM`: herdr 0.9.3 and later set `TERM_PROGRAM=herdr` in every pane, so a `$TERM_PROGRAM == ghostty` test no longer matches. Claude Code reads the variable when it starts, so restart it from a new pane after changing this.
+Check for Ghostty with `GHOSTTY_RESOURCES_DIR`, not `TERM_PROGRAM`: herdr 0.9.3 and later set `TERM_PROGRAM=herdr` in every pane, so a `$TERM_PROGRAM == ghostty` test no longer matches. Claude Code reads the variable when it starts, so restart it from a new pane after changing this. A pane whose shell started before the change keeps running without it, and every Claude Code started there draws blocks; the Lightbox says so once, at the first image.
 
 ### Proportions
 

@@ -7,6 +7,8 @@ export type LightboxShot = {
   origin: string;
   /** The absolute path when the image is a file on this machine. */
   path?: string;
+  /** A private copy of an image that came with no file behind it, so it can be drawn again after a reload. */
+  copy?: string;
   /** The MIME type it arrived as. */
   mime: string;
   /** When it arrived, in milliseconds. */

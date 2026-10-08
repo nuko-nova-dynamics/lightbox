@@ -36,6 +36,12 @@ export function imagePathsIn(text: string): string[] {
   return [...out];
 }
 
+/** Image file paths in quotes inside a piece of text, such as a shell command's `"my diagram.png"`: spaces kept. */
+export function quotedImagePaths(text: string): string[] {
+  const re = new RegExp(`(["'])([^"'\\n]+\\.(?:${EXTENSIONS}))\\1`, "gi");
+  return [...String(text || "").matchAll(re)].map((m) => m[2]!);
+}
+
 /** A path made absolute: `~/x` against home, a relative one against the working directory. */
 export function absolutePath(path: string, cwd: string, home: string): string {
   if (path.startsWith("~/")) return `${home.replace(/\/$/, "")}/${path.slice(2)}`;
@@ -161,6 +167,26 @@ const FORMAT_LABELS: Record<string, string> = {
 /** A MIME type as people name the format: `image/heic` → HEIC. */
 export function formatLabel(mime: string): string {
   return FORMAT_LABELS[mime] ?? mime.replace(/^image\//, "").toUpperCase();
+}
+
+/**
+ * The images right after a piece of text in the newest user message that holds it: where the conversation keeps a
+ * prompt the person queued while Claude worked, whose own row carries its text alone.
+ */
+export function imagesAfterText(messages: readonly { role: string; content: readonly unknown[] }[], text: string): { base64: string; mime: string }[] {
+  if (!text) return [];
+  for (let m = messages.length - 1; m >= 0; m -= 1) {
+    const message = messages[m]!;
+    if (message.role !== "user") continue;
+    const blocks = message.content as readonly { type?: string; text?: unknown }[];
+    // The last match: the same text queued twice in one message names the later delivery.
+    const at = blocks.findLastIndex((b) => b.type === "text" && typeof b.text === "string" && b.text.includes(text));
+    if (at < 0) continue;
+    let end = at + 1;
+    while (end < blocks.length && blocks[end]!.type === "image") end += 1;
+    return imageBlocks(blocks.slice(at + 1, end));
+  }
+  return [];
 }
 
 /** Files pasted into a prompt, which Claude Code notes as `[Image: source: /path]`; the path may hold spaces. */

@@ -27,7 +27,7 @@
     "renderer": {
       "type": "string",
       "title": "How pictures are drawn",
-      "description": "auto: real pixels where Claude Code draws them, colored character cells elsewhere (herdr, tmux, SSH). cells: always cells. pixels: always the kitty graphics protocol.",
+      "description": "auto: real pixels where Claude Code draws them, colored character cells elsewhere (herdr, tmux, SSH). cells: always cells. pixels: always pixels, which show as the image's name where Claude Code does not draw pictures.",
       "options": [
         "auto",
         "cells",

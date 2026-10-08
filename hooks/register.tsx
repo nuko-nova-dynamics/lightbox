@@ -7,17 +7,17 @@
 // Unicode quadrant blocks in colored cells (the Raster element), which work in any terminal and over SSH.
 
 import { atom, read, update } from "claude-code";
-import type { ElementConstructor, EngineInterface, ImageProps, RasterProps, Register } from "claude-code";
+import type { ElementConstructor, EngineInterface, ImageProps, RasterProps, Register, RenderChildren } from "claude-code";
 import type { LightboxShot } from "../types";
 import { decodeBase64, quadrantCells, readBmp } from "./cells.ts";
-import { absolutePath, ago, basename, CELL_ASPECT, decodedSize, fit, formatLabel, imageBlocks, imagePathsIn, isPng, mimeForPath, pastedImagePaths, pngSize, toolLabel } from "./images.ts";
+import { absolutePath, ago, basename, CELL_ASPECT, decodedSize, fit, formatLabel, imageBlocks, imagePathsIn, imagesAfterText, isPng, quotedImagePaths, mimeForPath, pastedImagePaths, pngSize, toolLabel } from "./images.ts";
 
 type Api = EngineInterface;
 type Call = { readonly tool: string; readonly [field: string]: unknown };
 type Bytes = { base64: string; mime: string };
 type NewShot = { title: string; origin: string; mime: string; path?: string; caption?: string; originalWidth?: number; originalHeight?: number };
 type Size = "strip" | "full";
-type Row = { readonly message: { readonly type: string; readonly content: readonly unknown[] }; readonly origin: { readonly kind: string }; readonly agentId?: string };
+type Row = { readonly message: { readonly type: string; readonly name?: string; readonly content: readonly unknown[] }; readonly origin: { readonly kind: string }; readonly agentId?: string };
 
 const PANE = "lightbox";
 const SHOW_TOOL = "mcp__lightbox__show";
@@ -31,6 +31,8 @@ const PIXELS_KEPT = 12;
 const CELLS_KEPT = 64;
 // The Image element takes at most 2 MiB of PNG.
 const PNG_LIMIT = 2 * 1024 * 1024 - 4096;
+// And at most this many pixels on a side.
+const PNG_SIDE_LIMIT = 4096;
 // The strip's picture: a few rows tall, so a small PNG. Every redraw carries it, so it must stay small.
 const STRIP_SIDE = 480;
 // Rows of picture inside the strip's frame; the frame adds one above and one below.
@@ -49,6 +51,8 @@ const CLAUDES = "#D97757";
 const DOTS = 12;
 // Images from one sender this close together arrived together: several pasted at once, or sent at once.
 const BATCH_MS = 3000;
+// The most images one paste or one tool result puts on the reel.
+const CAPTURE_MAX = 12;
 // The most pictures of one batch the strip shows side by side.
 const BATCH_SHOWN = 4;
 
@@ -58,18 +62,24 @@ const BATCH_SHOWN = 4;
 // HEIC, which it decodes several times faster than ImageMagick; ImageMagick goes first for the rest (SVG among
 // them), and JPEGs decode at reduced scale.
 const CONVERT = [
-  'in="$1"; side="$2"; mime="$3"; tmp="$(mktemp "${TMPDIR:-/tmp}/lightbox.XXXXXX")" || exit 1',
+  'umask 077; in="$1"; side="$2"; mime="$3"; tmp="$(mktemp "${TMPDIR:-/tmp}/lightbox.XXXXXX")" || exit 1',
   'trap \'rm -f "$tmp" "$tmp.in" "$tmp.png"\' EXIT',
   'if [ "$in" = "-" ]; then base64 -d > "$tmp.in" || exit 1; in="$tmp.in"; fi',
   'with_sips() {',
   '  command -v sips >/dev/null 2>&1 || return 1',
-  '  sips -g pixelWidth -g pixelHeight "$in" 2>/dev/null | awk \'/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print "dims", w, h}\' >&2',
-  '  sips -s format png -Z "$side" "$in" --out "$tmp.png" >/dev/null 2>&1; [ -s "$tmp.png" ]',
+  '  sips -s format png -Z "$side" "$in" --out "$tmp.png" >/dev/null 2>&1; [ -s "$tmp.png" ] || return 1',
+  '  dims="$(sips -g pixelWidth -g pixelHeight "$in" 2>/dev/null | awk \'/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{if(w)print w, h}\')"',
+  // sips keeps an EXIF orientation as a tag rather than turning the pixels, which the terminal draws as they lie.
+  '  if command -v magick >/dev/null 2>&1; then',
+  '    case "$(magick identify -format "%[orientation]" "$tmp.png" 2>/dev/null)" in LeftTop|RightTop|RightBottom|LeftBottom) dims="$(echo "$dims" | awk \'{print $2, $1}\')" ;; esac',
+  '    magick "$tmp.png" -auto-orient "$tmp.png" 2>/dev/null',
+  '  fi',
+  '  if [ -n "$dims" ]; then echo "dims $dims" >&2; fi',
   '}',
   'with_magick() {',
   '  if command -v magick >/dev/null 2>&1; then id="magick identify"; cv=magick; elif command -v convert >/dev/null 2>&1; then id=identify; cv=convert; else return 1; fi',
   '  $id -ping -format "dims %w %h\\n" "$in[0]" >&2 2>/dev/null',
-  '  $cv -define jpeg:size=$((side * 2))x$((side * 2)) "$in[0]" -auto-orient -resize "${side}x${side}>" "png:$tmp.png" 2>/dev/null; [ -s "$tmp.png" ]',
+  '  $cv -define jpeg:size=$((side * 2))x$((side * 2)) "$in[0]" -auto-orient -resize "${side}x${side}>" -depth 8 "png:$tmp.png" 2>/dev/null; [ -s "$tmp.png" ]',
   '}',
   'case "$mime" in image/heic|image/heif) with_sips || with_magick ;; *) with_magick || with_sips ;; esac',
   'if [ ! -s "$tmp.png" ]; then echo "no converter here could read this image (ImageMagick, or sips on macOS)" >&2; exit 1; fi',
@@ -79,7 +89,7 @@ const CONVERT = [
 // Prints, as base64, an uncompressed BMP of a PNG (read from stdin as base64) resized to exactly $1 by $2 pixels:
 // the pixels a Raster's quadrant cells are fitted to.
 const TO_BMP = [
-  'w="$1"; h="$2"; tmp="$(mktemp "${TMPDIR:-/tmp}/lightbox.XXXXXX")" || exit 1',
+  'umask 077; w="$1"; h="$2"; tmp="$(mktemp "${TMPDIR:-/tmp}/lightbox.XXXXXX")" || exit 1',
   'trap \'rm -f "$tmp" "$tmp.png" "$tmp.bmp"\' EXIT',
   'base64 -d > "$tmp.png" || exit 1',
   'if command -v magick >/dev/null 2>&1; then magick "$tmp.png[0]" -background black -alpha remove -alpha off -resize "${w}x${h}!" bmp3:-',
@@ -102,12 +112,32 @@ let canOpen = false;
 let rendererOption = "auto";
 let drawsPixels = false;
 let cellAspect = CELL_ASPECT;
+// Drawing cells only because this shell lacks CLAUDE_CODE_FORCE_TERMINAL_IMAGES, inside a multiplexer within a
+// terminal that draws pixels: said once, at the first image, since a fresh shell fixes it.
+let pixelsHint = "";
+// Where images that came with no file behind them get a private copy, so they can be drawn again after the mod
+// reloads (an option changed) and opened in another app; set at session start.
+let cacheDir = "";
+const EXTENSION_BY_MIME: Record<string, string> = { "image/jpeg": "jpg", "image/svg+xml": "svg" };
+
+/** Writes image bytes to a file only this user can read, and returns its path, or undefined when it cannot. */
+async function keepCopy($: Api, id: string, bytes: Bytes): Promise<string | undefined> {
+  if (!cacheDir) return undefined;
+  const name = `${id}.${EXTENSION_BY_MIME[bytes.mime] ?? bytes.mime.replace(/^image\//, "").replace(/[^a-z0-9]/gi, "")}`;
+  const run = await $.process.run(["sh", "-c", 'umask 077 && mkdir -p "$1" && base64 -d > "$1/$2"', "lightbox", cacheDir, name], { stdin: bytes.base64 }).catch(() => null);
+  return run?.exitCode === 0 ? `${cacheDir}/${name}` : undefined;
+}
+
+// True until the first session start after this module loaded: its memory of pictures and bytes starts empty.
+let freshModule = true;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0]?.slice(0, 160) ?? "";
 const newId = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`);
 
 async function convert($: Api, input: string, stdin: string, side: number, mime: string): Promise<{ png: string; dims: { width: number; height: number } | null }> {
   const run = await $.process.run(["sh", "-c", CONVERT, "lightbox", input, String(side), mime], { stdin, timeoutMs: 30_000 });
+  // Too large to come back whole: the caller tries a smaller size.
+  if (run.isStdoutTruncated) return { png: "", dims: null };
   const png = run.stdout.replace(/\s+/g, "");
   if (!isPng(png)) throw new Error(run.stderr.trim().split("\n").filter((l) => !l.startsWith("dims ")).pop() || `the converter exited with ${run.exitCode}`);
   const m = run.stderr.match(/dims (\d+) (\d+)/);
@@ -126,7 +156,7 @@ async function prepare($: Api, id: string, which: Size): Promise<void> {
   preparing.add(job);
   try {
     const bytes = inline.get(id);
-    const input = bytes ? "-" : shot.path;
+    const input = bytes ? "-" : (shot.path ?? shot.copy);
     if (!input) throw new Error("its bytes are no longer in memory");
     const stdin = bytes?.base64 ?? "";
     const side = which === "strip" ? STRIP_SIDE : FULL_SIDE;
@@ -136,18 +166,20 @@ async function prepare($: Api, id: string, which: Size): Promise<void> {
       const size = pngSize(bytes.base64);
       original = original ?? size;
       // A PNG small enough for this size is drawn as it is.
-      if (size && decodedSize(bytes.base64) <= PNG_LIMIT && (which === "full" || Math.max(size.width, size.height) <= side)) picture = bytes.base64;
+      if (size && decodedSize(bytes.base64) <= PNG_LIMIT && Math.max(size.width, size.height) <= (which === "full" ? PNG_SIDE_LIMIT : side)) picture = bytes.base64;
     }
     if (!picture && !bytes && which === "full" && shot.mime === "image/png") {
       const file = await $.fs.read(input, { as: "bytes" }).catch(() => null);
-      if (file && decodedSize(file.base64) <= PNG_LIMIT) picture = file.base64;
+      const size = file ? pngSize(file.base64) : null;
+      if (file && size && decodedSize(file.base64) <= PNG_LIMIT && Math.max(size.width, size.height) <= PNG_SIDE_LIMIT) picture = file.base64;
     }
     if (!picture) {
       const converted = await convert($, input, stdin, side, shot.mime);
       picture = converted.png;
       original = original ?? converted.dims;
     }
-    if (decodedSize(picture) > PNG_LIMIT) picture = (await convert($, input, stdin, SMALLER_SIDE, shot.mime)).png;
+    if (!picture || decodedSize(picture) > PNG_LIMIT) picture = (await convert($, input, stdin, SMALLER_SIDE, shot.mime)).png;
+    if (!picture || decodedSize(picture) > PNG_LIMIT) throw new Error("the picture is too large to draw, even made smaller");
     const drawn = pngSize(picture);
     pixels.set(id, { ...pixels.get(id), [which]: picture });
     await update($, shots, (list) =>
@@ -187,12 +219,45 @@ async function renderCells($: Api, id: string, columns: number, rows: number): P
   }
 }
 
-/** Drops pictures and bytes for shots that left the reel or fell out of the recent few. */
+// Shots being put on the reel: their bytes are held before the reel lists them, so eviction leaves them be.
+const adding = new Set<string>();
+// The shot whose capture wrote the reel last, and its place there: the one the selection follows.
+let newest = "";
+let newestIndex = 0;
+
+/**
+ * Drops what shots that left the reel held. Every shot on it keeps its small strip picture, so it can still be
+ * shown; past the recent few it lets go of its larger picture, and of its original bytes once the strip's is made.
+ */
 function evict(list: readonly LightboxShot[]): void {
+  const onReel = new Set(list.map((s) => s.id));
   const recent = new Set(list.slice(-PIXELS_KEPT).map((s) => s.id));
-  for (const id of pixels.keys()) if (!recent.has(id)) pixels.delete(id);
-  for (const id of inline.keys()) if (!recent.has(id)) inline.delete(id);
-  for (const key of cellCache.keys()) if (!recent.has(key.split(":")[0] ?? "")) cellCache.delete(key);
+  for (const [id, picture] of pixels) {
+    if (adding.has(id)) continue;
+    if (!onReel.has(id)) pixels.delete(id);
+    else if (!recent.has(id) && picture.full) pixels.set(id, picture.strip ? { strip: picture.strip } : {});
+  }
+  for (const id of inline.keys()) {
+    if (adding.has(id) || recent.has(id) || (onReel.has(id) && !pixels.get(id)?.strip)) continue;
+    inline.delete(id);
+  }
+  for (const key of cellCache.keys()) if (!onReel.has(key.split(":")[0] ?? "")) cellCache.delete(key);
+  for (const [id, path] of copies) {
+    if (adding.has(id) || onReel.has(id)) continue;
+    copies.delete(id);
+    gone.push(path);
+  }
+}
+
+// The private copies of shots on the reel, by id; and copies whose shots left it, to delete.
+const copies = new Map<string, string>();
+let gone: string[] = [];
+
+/** Deletes the private copies whose shots left the reel: only files in this session's own copy folder. */
+async function sweep($: Api): Promise<void> {
+  const paths = gone.filter((path) => cacheDir && path.startsWith(`${cacheDir}/`));
+  gone = [];
+  if (paths.length) await $.process.run(["rm", "-f", "--", ...paths]).catch(() => null);
 }
 
 /** A new image shows the strip again, unfolded; with autoOpen off, a hidden strip stays hidden and a toast says so. */
@@ -208,7 +273,10 @@ async function announce($: Api, title: string): Promise<void> {
 /** Puts an image on the reel, makes it the current one, and prepares it in the background. */
 async function addShot($: Api, shot: NewShot, bytes?: Bytes, quiet = false): Promise<void> {
   const id = newId();
+  adding.add(id);
   if (bytes) inline.set(id, bytes);
+  const copy = bytes && !shot.path ? await keepCopy($, id, bytes) : undefined;
+  if (copy) copies.set(id, copy);
   const entry: LightboxShot = {
     id,
     title: shot.title,
@@ -217,21 +285,34 @@ async function addShot($: Api, shot: NewShot, bytes?: Bytes, quiet = false): Pro
     at: Date.now(),
     status: "pending",
     ...(shot.path ? { path: shot.path } : {}),
+    ...(copy ? { copy } : {}),
     ...(shot.caption ? { caption: shot.caption } : {}),
     ...(shot.originalWidth && shot.originalHeight ? { originalWidth: shot.originalWidth, originalHeight: shot.originalHeight } : {})
   };
-  let reel: LightboxShot[] = [];
   await update($, shots, (list) => {
+    newest = id;
     // The same file again replaces its earlier shot, so an edited SVG or a retaken screenshot shows fresh.
     const rest = shot.path ? list.filter((s) => s.path !== shot.path) : list;
     const before = rest[rest.length - 1];
     if (before && before.origin === entry.origin && entry.at - before.at <= BATCH_MS) entry.batch = before.batch ?? before.id;
-    reel = [...rest, entry].slice(-REEL_SIZE);
+    const reel = [...rest, entry].slice(-REEL_SIZE);
+    newestIndex = reel.length - 1;
     return reel;
   });
-  await update($, current, () => reel.length - 1);
-  evict(reel);
+  // Evicts right on the read, with nothing awaited between, and only then stops protecting this shot: a capture
+  // running beside this one may be about to evict from an older reel that does not list it yet.
+  const list = await read($, shots);
+  evict(list);
+  adding.delete(id);
+  await sweep($);
+  // Only while it is still the newest, checked as the selection is written: a capture that finished later has
+  // already moved it on.
+  await update($, current, (i) => (newest === id ? newestIndex : (i ?? 0)));
   $.clock.after(0, () => { void prepare($, id, "strip"); });
+  if (pixelsHint) {
+    $.ui.toast(pixelsHint);
+    pixelsHint = "";
+  }
   if (!quiet) await announce($, shot.title);
 }
 
@@ -263,6 +344,11 @@ function originOf(call: Call, path: string): string {
   return `from ${program || "a command"}`;
 }
 
+/** The directories a shell command changes into, in order: `cd dir` and `pushd dir`, quotes taken off. */
+function cdTargets(command: string): string[] {
+  return [...command.matchAll(/(?:^|[;&|(\n]\s*)(?:cd|pushd)\s+("[^"]+"|'[^']+'|[^\s;&|)]+)/g)].map((m) => m[1]!.replace(/^["']|["']$/g, "")).filter((dir) => dir !== "-");
+}
+
 // Claude Code's scratch folder for a session: what Claude writes there is its own working material.
 const SCRATCH = /\/claude-\d+\/[^/]+\/[^/]+\/scratchpad\//;
 
@@ -289,18 +375,32 @@ async function capture($: Api, call: Call, result: unknown, started: number): Pr
     return;
   }
 
-  const blocks = imageBlocks(r.result).slice(0, 4);
+  const blocks = imageBlocks(r.result).slice(0, CAPTURE_MAX);
   for (const block of blocks) await addShot($, { title: toolLabel(call.tool), origin: `from ${toolLabel(call.tool)}`, mime: block.mime }, block);
   if (blocks.length) return;
 
-  // Image files the call just wrote: named in its input or output, and modified while it ran.
-  const candidates = imagePathsIn(`${JSON.stringify(call)}\n${typeof r.text === "string" ? r.text : ""}`).slice(0, 8);
+  // Image files the call just wrote: named in its input or output, and modified while it ran. A call that ran
+  // read-only (`ls`, `file`) wrote none, whatever it names.
+  if ((result as { isReadOnly?: true } | undefined)?.isReadOnly) return;
+  // A field that is one path is taken whole, spaces and all, and so is a quoted path in a command; the rest of the
+  // text is searched for paths.
+  const texts = [...Object.values(call).filter((v): v is string => typeof v === "string"), typeof r.text === "string" ? r.text : ""];
+  const fields = texts.filter((v) => !v.includes("\n") && Boolean(mimeForPath(v)));
+  const candidates = [...new Set([...fields, ...texts.flatMap(quotedImagePaths), ...imagePathsIn(`${JSON.stringify(call)}\n${texts.at(-1)}`)])].slice(0, 8);
   if (!candidates.length) return;
   const cwd = await $.session.cwd();
   const home = (await $.env.get("HOME")) ?? "";
+  // A relative path in a command that changed directory first may be relative to where it went: the latest one
+  // that holds the file wins.
+  const bases = [cwd, ...(call.tool === "Bash" ? cdTargets(String(call.command ?? "")).map((dir) => absolutePath(dir, cwd, home)) : [])];
   for (const candidate of candidates) {
-    const path = absolutePath(candidate, cwd, home);
-    const stat = await $.fs.stat(path).catch(() => null);
+    let path = "";
+    let stat = null;
+    for (const base of candidate.startsWith("/") || candidate.startsWith("~/") ? [cwd] : [...bases].reverse()) {
+      path = absolutePath(candidate, base, home);
+      stat = await $.fs.stat(path).catch(() => null);
+      if (stat) break;
+    }
     if (!stat || stat.kind !== "file" || stat.size === 0 || stat.mtimeMs < started - 2000) continue;
     // A scratch file Claude wrote is not meant for the person; one it reads or sends still shows.
     if (SCRATCH.test(path)) continue;
@@ -309,13 +409,37 @@ async function capture($: Api, call: Call, result: unknown, started: number): Pr
 }
 
 /**
+ * A prompt queued while Claude worked keeps only its text in its own row; its images are in the conversation the
+ * next request is built from, right after that text. The row is stored before the conversation shows it, so a
+ * miss looks again a little later.
+ */
+async function queuedImages($: Api, text: string, labeled: boolean): Promise<Bytes[]> {
+  // A prompt that names an image is looked up until it shows; one that names none, once.
+  for (const wait of labeled ? [0, 250, 1000] : [0]) {
+    if (wait) await new Promise<void>((resolve) => { $.clock.after(wait, () => resolve()); });
+    const found = imagesAfterText(await $.session.messages({ as: "api" }), text);
+    if (found.length) return found;
+  }
+  if (!labeled) return [];
+  $.ui.log("lightbox: a queued prompt named an image the conversation does not hold", { to: "debug" });
+  return [];
+}
+
+/**
  * Images the person put in a prompt: its row carries each as an image block, whether pasted from the clipboard
- * or dragged in as a file (which Claude Code also notes as `[Image: source: /path]`, naming it).
+ * or dragged in as a file (which Claude Code also notes as `[Image: source: /path]`, naming it). A prompt typed
+ * while Claude works arrives as a `queued_command` row instead, delivered into the running turn.
  */
 async function capturePasted($: Api, row: Row): Promise<void> {
-  if (row.agentId || row.message.type !== "user" || (row.origin.kind !== "composer" && row.origin.kind !== "bridge")) return;
-  const text = row.message.content.map((b) => ((b as { type?: string }).type === "text" ? String((b as { text?: unknown }).text ?? "") : "")).join("\n");
-  const blocks = imageBlocks(row.message.content).slice(0, 4);
+  const queued = row.message.type === "attachment" && row.message.name === "queued_command";
+  if (row.agentId || (row.message.type !== "user" && !queued) || (row.origin.kind !== "composer" && row.origin.kind !== "bridge")) return;
+  const texts = row.message.content.flatMap((b) => ((b as { type?: string }).type === "text" ? [String((b as { text?: unknown }).text ?? "")] : []));
+  const text = texts.join("\n");
+  // A queued prompt names its pasted images `[Image #N]` when they came from the clipboard; one from Remote Control
+  // or with a dragged-in file may carry its images with no label, so then its text is looked up whole.
+  const labeled = texts.find((t) => /\[Image #\d+\]/.test(t));
+  const marked = labeled ?? texts.findLast((t) => t.trim());
+  const blocks = (queued ? (marked ? await queuedImages($, marked, Boolean(labeled)) : []) : imageBlocks(row.message.content)).slice(0, CAPTURE_MAX);
   const paths = pastedImagePaths(text);
   // A message with no image means the person has moved on: the strip folds to one line until the next image.
   if (!blocks.length && !paths.length) {
@@ -332,7 +456,7 @@ async function capturePasted($: Api, row: Row): Promise<void> {
     await addShot($, { title, origin: "pasted by you", mime: block.mime, ...(path ? { path } : {}) }, block);
   }
   // A file the model could not take as an image block (a HEIC, say) still shows, from the file.
-  for (const path of paths.slice(blocks.length, 4)) await showFile($, path, "pasted by you");
+  for (const path of paths.slice(blocks.length, CAPTURE_MAX)) await showFile($, path, "pasted by you");
 }
 
 async function removeShot($: Api, id: string): Promise<void> {
@@ -345,20 +469,17 @@ async function removeShot($: Api, id: string): Promise<void> {
   await update($, current, (i) => Math.max(0, Math.min(i ?? 0, length - 1)));
   pixels.delete(id);
   inline.delete(id);
+  const copy = copies.get(id);
+  if (copy) {
+    copies.delete(id);
+    gone.push(copy);
+    await sweep($);
+  }
 }
 
 async function openShot($: Api, shot: LightboxShot): Promise<void> {
-  if (shot.path) {
-    await $.process.run(["open", shot.path]);
-    return;
-  }
-  // An image with no file behind it opens from a temporary file: its own bytes while they are held, else the PNG drawn.
-  const bytes = inline.get(shot.id);
-  const picture = pixels.get(shot.id);
-  const data = bytes?.base64 ?? picture?.full ?? picture?.strip;
-  if (!data) return;
-  const ext = bytes ? ({ "image/jpeg": "jpg", "image/svg+xml": "svg" } as Record<string, string>)[bytes.mime] ?? bytes.mime.replace(/^image\//, "") : "png";
-  await $.process.run(["sh", "-c", 'f="$(mktemp "${TMPDIR:-/tmp}/lightbox.XXXXXX")"; base64 -d > "$f.$1" && open "$f.$1"; rm -f "$f"', "lightbox", ext], { stdin: data });
+  const file = shot.path ?? shot.copy;
+  if (file) await $.process.run(["open", file]);
 }
 
 /**
@@ -369,12 +490,13 @@ async function openShot($: Api, shot: LightboxShot): Promise<void> {
 async function choosePixels($: Api): Promise<boolean> {
   if (rendererOption === "pixels") return true;
   if (rendererOption === "cells") return false;
-  if (await $.env.get("CLAUDE_CODE_FORCE_TERMINAL_IMAGES")) return true;
+  // Claude Code reads the variable as on only for these values; 0, false or off leave pixels off.
+  if (/^(1|true|yes|on)$/i.test(((await $.env.get("CLAUDE_CODE_FORCE_TERMINAL_IMAGES")) ?? "").trim())) return true;
   const term = (await $.env.get("TERM")) ?? "";
   const program = (await $.env.get("TERM_PROGRAM")) ?? "";
   const kitty = Boolean(await $.env.get("KITTY_WINDOW_ID"));
   const multiplexed = Boolean((await $.env.get("HERDR_ENV")) || (await $.env.get("TMUX")) || (await $.env.get("ZELLIJ")) || (await $.env.get("STY")));
-  return !multiplexed && (/kitty|ghostty/i.test(term) || kitty || /^(ghostty|kitty|wezterm)$/i.test(program));
+  return !multiplexed && (/kitty|ghostty/i.test(term) || kitty || /^(ghostty|kitty)$/i.test(program));
 }
 
 const clampIndex = (i: number | undefined, length: number) => Math.max(0, Math.min(i ?? 0, length - 1));
@@ -408,6 +530,19 @@ export const register: Register = (on, options) => {
     // Opening a file in Preview or Finder only means something on the Mac the person is looking at.
     canOpen = system?.stdout.trim() === "Darwin" && !remote;
     drawsPixels = await choosePixels($);
+    cacheDir = `${((await $.env.get("TMPDIR")) ?? "/tmp").replace(/\/$/, "")}/lightbox/${await $.session.id()}`;
+    // After a reload the module holds no bytes: an image with neither a file nor a private copy cannot be drawn
+    // again, so it leaves the reel.
+    if (freshModule) {
+      freshModule = false;
+      const kept = await update($, shots, (list) => list.filter((s) => s.path || s.copy));
+      for (const s of kept) if (s.copy) copies.set(s.id, s.copy);
+      await update($, current, (i) => clampIndex(i, kept.length));
+    }
+    if (!drawsPixels && rendererOption === "auto" && (await $.env.get("HERDR_ENV")) && ((await $.env.get("GHOSTTY_RESOURCES_DIR")) || (await $.env.get("KITTY_WINDOW_ID")))) {
+      pixelsHint = "Lightbox draws blocks here: this shell has no CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1. Set it, or open a new pane, and restart Claude for real pixels.";
+      $.ui.log(`lightbox: ${pixelsHint}`, { to: "debug" });
+    }
     // Keeps "2 min ago" true while the strip sits there.
     $.clock.every(60_000, () => $.ui.invalidate("ui.render"));
     if (!autoOpen && !(await read($, shots)).length) await update($, hidden, () => true);
@@ -431,8 +566,9 @@ export const register: Register = (on, options) => {
     return result;
   });
 
-  // Images pasted into a prompt, typed at an idle prompt or delivered into a running turn. Captured once the row
-  // is stored, off the append's path, so the prompt is not held up.
+  // Images pasted into a prompt, typed at an idle prompt (door `prompt`) or queued while Claude works and
+  // delivered into the running turn (door `delivery`). Captured once the row is stored, off the append's path,
+  // so the prompt is not held up.
   for (const door of ["prompt", "delivery"] as const) {
     on("session.append", { door }, async ($, e, next) => {
       const result = await next(e);
@@ -446,7 +582,8 @@ export const register: Register = (on, options) => {
   on("tool.call", async ($, e, next) => {
     const call = e as unknown as Call;
     if (call.tool === SHOW_TOOL) {
-      const caption = typeof call.caption === "string" ? call.caption.slice(0, 200) : undefined;
+      // One line: the strip gives a caption one row.
+      const caption = typeof call.caption === "string" ? call.caption.replace(/\s+/g, " ").trim().slice(0, 200) || undefined : undefined;
       return { result: await showFile($, String(call.path ?? ""), "sent by Claude", caption) };
     }
     const started = Date.now();
@@ -467,6 +604,9 @@ export const register: Register = (on, options) => {
       pixels.clear();
       inline.clear();
       cellCache.clear();
+      gone.push(...copies.values());
+      copies.clear();
+      await sweep($);
       return { text: "Lightbox cleared." };
     }
     if (arg === "view") {
@@ -477,6 +617,7 @@ export const register: Register = (on, options) => {
       const said = await showFile($, arg, "opened by you", undefined, true);
       if (!said.startsWith("Showing")) return { text: said };
       await update($, hidden, () => false);
+      await update($, folded, () => false);
       return {};
     }
     if (!(await read($, shots)).length) return { text: `No images yet. Pasted images, images Claude reads or sends, and /lightbox <path> (${FORMATS}) appear above the prompt.` };
@@ -507,7 +648,6 @@ export const register: Register = (on, options) => {
 
     const index = clampIndex(await read($, current), list.length);
     const shot = list[index]!;
-    const picture = pixels.get(shot.id)?.strip;
 
     // The batch the current image arrived in, and the window of it that fits.
     const batchOf = (s: LightboxShot) => s.batch ?? s.id;
@@ -520,15 +660,25 @@ export const register: Register = (on, options) => {
     const before = from - first;
     const after = last + 1 - (from + shown.length);
 
+    // The band gets the rows the bottom slot has left above the prompt, fewer while a list of running agents
+    // sits there too, and scrolls whatever is taller. The strip always fits them whole instead: smaller pictures
+    // first, then fewer words and keys, then a single line.
+    const rows = e.props.maxRows;
+    const maxRows = Math.max(1, Math.min(STRIP_ROWS, rows - 2));
     // The pictures share about three fifths of the width, each in its frame; the words take the rest.
-    const maxRows = Math.max(2, Math.min(STRIP_ROWS, e.props.maxRows - 2));
     const budget = Math.floor(e.props.bodyColumns * 0.6) - (shown.length - 1);
     const each = Math.max(6, Math.min(STRIP_MAX_COLUMNS, Math.floor(budget / shown.length) - 2));
+    const boxOf = (s: LightboxShot) => (s.width && s.height ? fit(s.width, s.height, each, maxRows, cellAspect) : { columns: Math.min(each, Math.round(3 * cellAspect)), rows: Math.min(3, maxRows) });
+    const counter = (n: number) => (n > 0 ? String(n).length + 2 : 0);
+    const picturesWidth = shown.reduce((sum, s) => sum + boxOf(s).columns + 2, 0) + (shown.length - 1) + counter(before) + counter(after);
+    // The words' column: the band less its padding, the pictures, the gap and the room kept for the collapse mark.
+    const wordsWidth = e.props.bodyColumns - 2 - picturesWidth - 2 - 4;
+    const cramped = rows < 4 || wordsWidth < 16;
 
     const frame = (s: LightboxShot) => {
       const strip = pixels.get(s.id)?.strip;
       if (!strip && s.status !== "failed") $.clock.after(0, () => { void prepare($, s.id, "strip"); });
-      const box = s.width && s.height ? fit(s.width, s.height, each, maxRows, cellAspect) : { columns: Math.min(each, Math.round(3 * cellAspect)), rows: Math.min(3, maxRows) };
+      const box = boxOf(s);
       let view;
       if (s.status === "failed") view = <Text color="red">✕</Text>;
       else if (strip && Image) view = <Image key={`s-${s.id}`} source={{ png: strip }} columns={box.columns} rows={box.rows} alt={`${s.title} (image)`} />;
@@ -549,13 +699,17 @@ export const register: Register = (on, options) => {
     };
 
     const step = (delta: number) => () => { void update($, current, (i) => ((((i ?? 0) + delta) % list.length) + list.length) % list.length); };
+    const openPane = () => { void $.ui.open({ id: PANE, title: "Lightbox", focus: true }).then(() => $.ui.invalidate("ui.render")); };
     const tint = originColor(shot.origin);
     const count = last + 1 - first;
 
-    // Folded: one line, its pictures a row tall, until the next image or the person opens it.
-    if (await read($, folded)) {
+    // Folded: one line, its pictures a row tall, until the next image or the person opens it. Also where the band
+    // has no room for more, and then the larger pane is the way to see it.
+    const isFolded = await read($, folded);
+    if (isFolded || cramped) {
       const tiny = (s: LightboxShot) => {
         const strip = pixels.get(s.id)?.strip;
+        if (!strip && s.status !== "failed") $.clock.after(0, () => { void prepare($, s.id, "strip"); });
         if (!strip || !s.width || !s.height) return null;
         const size = fit(s.width, s.height, 8, 1, cellAspect);
         if (Image) return <Image key={`t-${s.id}`} source={{ png: strip }} columns={size.columns} rows={1} alt={s.title} />;
@@ -564,16 +718,26 @@ export const register: Register = (on, options) => {
         if (!cells) $.clock.after(0, () => { void renderCells($, s.id, size.columns, 1); });
         return cells ? <Raster key={`t-${s.id}`} columns={size.columns} rows={1} cells={cells} /> : null;
       };
+      // The keys and a dozen cells of name come first; tiny pictures fill what is left, none on a narrow band.
+      const keysWidth = (isFolded ? "expand".length : "larger".length) + 1 + "hide".length;
+      let room = e.props.bodyColumns - 2 - 4 - keysWidth - 1 - 12;
+      const fitting = shown.filter((s) => {
+        const width = s.width && s.height ? fit(s.width, s.height, 8, 1, cellAspect).columns + 1 : 0;
+        if (width > room) { room = 0; return false; }
+        room -= width;
+        return true;
+      });
       return (
         <Box flexDirection="row" paddingX={1} paddingRight={4} columnGap={1}>
-          {shown.map(tiny)}
+          {fitting.map(tiny)}
           <Text bold wrap="truncate-middle">{shot.title}</Text>
-          {count > 1 ? <Text dimColor>+{count - 1}</Text> : null}
-          {tint ? <Text color={tint}>{shot.origin}</Text> : <Text dimColor>{shot.origin}</Text>}
+          {count > 1 ? <Text dimColor wrap="truncate-end">+{count - 1}</Text> : null}
+          {tint ? <Text color={tint} wrap="truncate-end">{shot.origin}</Text> : <Text dimColor wrap="truncate-end">{shot.origin}</Text>}
           <Text dimColor wrap="truncate-end">· {ago(Date.now() - shot.at)}</Text>
           <Box flexGrow={1} />
-          <Button key="expand" plain dimColor label="expand" hotkey="e" onPress={() => { void update($, folded, () => false); }} />
-          <Button key="hide" plain dimColor label="hide" hotkey="x" onPress={() => { void update($, hidden, () => true); }} />
+          {isFolded ? <Button key="expand" plain dimColor label="expand" onPress={() => { void update($, folded, () => false); }} /> : null}
+          {isFolded ? null : <Button key="view" plain dimColor label="larger" onPress={openPane} />}
+          <Button key="hide" plain dimColor label="hide" onPress={() => { void update($, hidden, () => true); }} />
         </Box>
       );
     }
@@ -592,6 +756,38 @@ export const register: Register = (on, options) => {
         </Box>
       ) : null;
 
+    // The words' rows: a row above them, level with the picture's top, only when the band has rows to spare; then
+    // the name and the details, a note when there is room, and the keys in what is left, the least needed dropped
+    // first so they fit without wrapping past it.
+    const lead = rows >= 6 ? 1 : 0;
+    const spare = rows - lead - 2;
+    const noteText = shot.status === "failed" ? `Can't show it: ${shot.note ?? "unknown error"}` : shot.caption;
+    const note = noteText && spare >= 2 ? noteText : undefined;
+    const keyRows = spare - (note ? 1 : 0);
+    type Key = { id: string; width: number; node: RenderChildren };
+    // Click targets: the label alone, dim until the pointer is over it.
+    const button = (id: string, label: string, onPress: () => void): Key => ({ id, width: label.length, node: <Button key={id} plain dimColor label={label} onPress={onPress} /> });
+    let keys: Key[] = [
+      ...(list.length > 1 ? [button("prev", "‹ prev", step(-1)), button("next", "next ›", step(1))] : []),
+      button("view", "larger", openPane),
+      ...(canOpen && (shot.path || shot.copy) ? [button("open", "open", () => { void openShot($, shot); })] : []),
+      button("fold", "fold", () => { void update($, folded, () => true); }),
+      button("hide", "hide", () => { void update($, hidden, () => true); })
+    ];
+    const rowsFor = (items: Key[]) => {
+      let lines = 1;
+      let used = -2;
+      for (const item of items) {
+        if (used + 2 + item.width > wordsWidth && used >= 0) { lines += 1; used = -2; }
+        used += 2 + item.width;
+      }
+      return lines;
+    };
+    for (const drop of ["fold", "open", "prev", "next", "view"]) {
+      if (rowsFor(keys) <= keyRows) break;
+      keys = keys.filter((k) => k.id !== drop);
+    }
+
     return (
       <Box flexDirection="row" paddingX={1} columnGap={2}>
         <Box flexDirection="row" columnGap={1} flexShrink={0}>
@@ -600,28 +796,20 @@ export const register: Register = (on, options) => {
           {after > 0 ? <Box paddingTop={1}><Text dimColor>+{after}</Text></Box> : null}
         </Box>
         {/* Level with the picture's top, and clear of the collapse mark in the band's top right corner. */}
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingTop={1} paddingRight={4}>
-          <Box flexDirection="row" columnGap={2}>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingTop={lead} paddingRight={4}>
+          <Box flexDirection="row" columnGap={2} height={1}>
             <Text bold wrap="truncate-middle">{shot.title}</Text>
             {reel}
           </Box>
-          <Box flexDirection="row">
-            {tint ? <Text color={tint}>{shot.origin}</Text> : <Text dimColor>{shot.origin}</Text>}
-            <Text dimColor wrap="truncate-end"> · {details(shot)}</Text>
+          <Box flexDirection="row" height={1}>
+            <Text wrap="truncate-end">
+              {tint ? <Text color={tint}>{shot.origin}</Text> : <Text dimColor>{shot.origin}</Text>}
+              <Text dimColor> · {details(shot)}</Text>
+            </Text>
           </Box>
-          {shot.status === "failed" ? (
-            <Text color="red" wrap="truncate-end">Can't show it: {shot.note ?? "unknown error"}</Text>
-          ) : shot.caption ? (
-            <Text italic wrap="truncate-end">{shot.caption}</Text>
-          ) : null}
+          {note ? (shot.status === "failed" ? <Text color="red" wrap="truncate-end">{note}</Text> : <Text italic wrap="truncate-end">{note}</Text>) : null}
           <Box flexDirection="row" columnGap={2} flexWrap="wrap">
-            {list.length > 1 ? <Button key="prev" plain dimColor label="prev" hotkey="h" onPress={step(-1)} /> : null}
-            {list.length > 1 ? <Button key="next" plain dimColor label="next" hotkey="l" onPress={step(1)} /> : null}
-            <Button key="view" plain dimColor label="larger" hotkey="v" onPress={() => { void $.ui.open({ id: PANE, title: "Lightbox", focus: true }).then(() => $.ui.invalidate("ui.render")); }} />
-            {canOpen && (shot.path || picture) ? <Button key="open" plain dimColor label="open" hotkey="o" onPress={() => { void openShot($, shot); }} /> : null}
-            <Button key="fold" plain dimColor label="fold" hotkey="f" onPress={() => { void update($, folded, () => true); }} />
-            <Button key="hide" plain dimColor label="hide" hotkey="x" onPress={() => { void update($, hidden, () => true); }} />
-            <Text dimColor italic>ctrl+x tab for keys</Text>
+            {keys.map((k) => k.node)}
           </Box>
         </Box>
       </Box>
@@ -688,6 +876,7 @@ export const register: Register = (on, options) => {
 
     const thumbnail = (s: LightboxShot) => {
       const thumb = pixels.get(s.id)?.strip;
+      if (!thumb && s.status !== "failed") $.clock.after(0, () => { void prepare($, s.id, "strip"); });
       if (!thumb || !s.width || !s.height) return <Text dimColor>…</Text>;
       const size = fit(s.width, s.height, THUMB_COLUMNS, THUMB_ROWS, cellAspect);
       if (Image) return <Image key={`i-${s.id}`} source={{ png: thumb }} columns={size.columns} rows={size.rows} alt={s.title} />;
@@ -731,14 +920,13 @@ export const register: Register = (on, options) => {
           <Text dimColor>{"─".repeat(width)}</Text>
         </Box>
         <Box flexDirection="row" columnGap={3} flexWrap="wrap">
-          <Button key="prev" plain dimColor label="prev" hotkey="h" onPress={step(-1)} />
-          <Button key="next" plain dimColor label="next" hotkey="l" onPress={step(1)} />
-          {canOpen && (shot.path || source) ? <Button key="open" plain dimColor label="open" hotkey="o" onPress={() => { void openShot($, shot); }} /> : null}
-          {canOpen && shot.path ? <Button key="reveal" plain dimColor label="reveal" hotkey="r" onPress={() => { void $.process.run(["open", "-R", shot.path!]); }} /> : null}
-          {shot.path ? <Button key="copy" plain dimColor label="copy" hotkey="c" onPress={() => { void $.ui.copy({ text: shot.path!, surface: e.surface }); }} /> : null}
-          <Button key="remove" plain dimColor label="remove" hotkey="x" onPress={() => { void removeShot($, shot.id); }} />
+          {list.length > 1 ? <Button key="prev" plain dimColor label="‹ prev" onPress={step(-1)} /> : null}
+          {list.length > 1 ? <Button key="next" plain dimColor label="next ›" onPress={step(1)} /> : null}
+          {canOpen && (shot.path || shot.copy) ? <Button key="open" plain dimColor label="open" onPress={() => { void openShot($, shot); }} /> : null}
+          {canOpen && shot.path ? <Button key="reveal" plain dimColor label="show in Finder" onPress={() => { void $.process.run(["open", "-R", shot.path!]); }} /> : null}
+          {shot.path ? <Button key="copy" plain dimColor label="copy path" onPress={() => { void $.ui.copy({ text: shot.path!, surface: e.surface }); }} /> : null}
+          <Button key="remove" plain dimColor label="remove" onPress={() => { void removeShot($, shot.id); }} />
         </Box>
-        {e.props.isFocused ? null : <Text dimColor>ctrl+x tab to use the keys, or click</Text>}
       </Box>
     );
   });

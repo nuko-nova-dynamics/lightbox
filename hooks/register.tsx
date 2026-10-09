@@ -770,8 +770,11 @@ export const register: Register = (on, options) => {
         return cells ? <Raster key={`t-${s.id}`} columns={size.columns} rows={1} cells={cells} /> : null;
       };
       // The keys and a dozen cells of name come first; tiny pictures fill what is left, none on a narrow band. Each key
-      // is a framed `[ label ]`, four cells wider than its label.
-      const keysWidth = (isFolded ? "expand".length : "larger".length) + 4 + 1 + "hide".length + 4;
+      // is a framed `[ label ]`, four cells wider than its label, unless the band is too narrow for frames: then the
+      // labels alone, as before.
+      const isFramed = e.props.bodyColumns >= 2 + 4 + "larger".length + 4 + 1 + "hide".length + 4 + 1 + 12 + 5;
+      const frameWidth = isFramed ? 4 : 0;
+      const keysWidth = (isFolded ? "expand".length : "larger".length) + frameWidth + 1 + "hide".length + frameWidth;
       let room = e.props.bodyColumns - 2 - 4 - keysWidth - 1 - 12;
       const fitting = shown.filter((s) => {
         const width = s.width && s.height ? fit(s.width, s.height, 8, 1, cellAspect).columns + 1 : 0;
@@ -787,9 +790,9 @@ export const register: Register = (on, options) => {
           {tint ? <Text color={tint} wrap="truncate-end">{shot.origin}</Text> : <Text dimColor wrap="truncate-end">{shot.origin}</Text>}
           <Text dimColor wrap="truncate-end">· {ago(Date.now() - shot.at)}</Text>
           <Box flexGrow={1} />
-          {isFolded ? <Button key="expand" variant="primary" label="expand" onPress={() => { void update($, folded, () => false); }} /> : null}
-          {isFolded ? null : <Button key="view" variant="primary" label="larger" onPress={openPane} />}
-          <Button key="hide" variant="secondary" label="hide" onPress={() => { void update($, hidden, () => true); }} />
+          {isFolded ? (isFramed ? <Button key="expand" variant="primary" label="expand" onPress={() => { void update($, folded, () => false); }} /> : <Button key="expand" plain dimColor label="expand" onPress={() => { void update($, folded, () => false); }} />) : null}
+          {isFolded ? null : isFramed ? <Button key="view" variant="primary" label="larger" onPress={openPane} /> : <Button key="view" plain dimColor label="larger" onPress={openPane} />}
+          {isFramed ? <Button key="hide" variant="secondary" label="hide" onPress={() => { void update($, hidden, () => true); }} /> : <Button key="hide" plain dimColor label="hide" onPress={() => { void update($, hidden, () => true); }} />}
         </Box>
       );
     }
@@ -908,7 +911,21 @@ export const register: Register = (on, options) => {
     // A docked pane is shorter than the screen (the prompt and status sit below it): size to its body.
     const bodyRows = e.props.scroll?.bodyRows ?? 0;
     const hasStrip = list.length > 1;
-    const chrome = 2 + 2 + (shot.caption ? 2 : 0) + (hasStrip ? THUMB_ROWS + 3 : 0) + 3;
+    // The footer: a rule, then the outlined keys, three rows for each line they wrap onto at this width.
+    const footerKeys = [
+      ...(hasStrip ? ["‹ prev", "next ›"] : []),
+      ...(canOpen && (shot.path || shot.copy) ? ["open"] : []),
+      ...(canOpen && shot.path ? ["show in Finder"] : []),
+      ...(shot.path ? ["copy path"] : []),
+      "remove"
+    ];
+    let footerLines = 1;
+    let used = -1;
+    for (const label of footerKeys) {
+      if (used + 1 + label.length + 4 > width && used >= 0) { footerLines += 1; used = -1; }
+      used += 1 + label.length + 4;
+    }
+    const chrome = 2 + 2 + (shot.caption ? 2 : 0) + (hasStrip ? THUMB_ROWS + 3 : 0) + 2 + 3 * footerLines;
     const maxRows =
       e.props.placement === "dock"
         ? Math.max(6, (bodyRows > 0 ? bodyRows : viewportRows - 4) - chrome)

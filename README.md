@@ -28,7 +28,7 @@ Requires Claude Code 2.1.288 or later.
 - When you send a message with no image, the strip folds to one line with its pictures a row tall. The next image opens it again.
 - `/lightbox` opens a folded or hidden strip and hides an open one. `/lightbox <path>` shows a file, `/lightbox view` opens the larger view, and `/lightbox clear` empties the reel.
 
-The larger view is a pane with the current image as large as the pane allows and thumbnails of the images around it; the strip steps aside while it shows. In it, `h` and `l` step, `o` opens in Preview, `r` reveals in Finder, `c` copies the path and `x` removes the image.
+The larger view is a pane with the current image as large as the pane allows and thumbnails of the images around it; the strip steps aside while it shows. Click `smaller` or press Escape to close it and bring the strip back. In it, `h` and `l` step, `o` opens in Preview, `r` reveals in Finder, `c` copies the path and `x` removes the image.
 
 Open and Reveal appear only on a Mac you are sitting at, not over SSH. The reel keeps the last 24 images per session, with pictures for the 12 most recent held in memory.
 

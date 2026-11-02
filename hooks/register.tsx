@@ -652,7 +652,7 @@ export const register: Register = (on, options) => {
       return { text: "Lightbox cleared." };
     }
     if (arg === "view") {
-      await $.ui.open({ id: PANE, title: "Lightbox", focus: true });
+      await $.ui.open({ id: PANE, title: "Lightbox", focus: true, closeOnEscape: true });
       return {};
     }
     if (arg) {
@@ -750,7 +750,7 @@ export const register: Register = (on, options) => {
     };
 
     const step = (delta: number) => () => { void update($, current, (i) => ((((i ?? 0) + delta) % list.length) + list.length) % list.length); };
-    const openPane = () => { void $.ui.open({ id: PANE, title: "Lightbox", focus: true }).then(() => $.ui.invalidate("ui.render")); };
+    const openPane = () => { void $.ui.open({ id: PANE, title: "Lightbox", focus: true, closeOnEscape: true }).then(() => $.ui.invalidate("ui.render")); };
     const tint = originColor(shot.origin);
     const count = last + 1 - first;
 
@@ -913,6 +913,7 @@ export const register: Register = (on, options) => {
     const hasStrip = list.length > 1;
     // The footer: a rule, then the outlined keys, three rows for each line they wrap onto at this width.
     const footerKeys = [
+      "smaller",
       ...(hasStrip ? ["‹ prev", "next ›"] : []),
       ...(canOpen && (shot.path || shot.copy) ? ["open"] : []),
       ...(canOpen && shot.path ? ["show in Finder"] : []),
@@ -999,6 +1000,8 @@ export const register: Register = (on, options) => {
           <Text dimColor>{"─".repeat(width)}</Text>
         </Box>
         <Box flexDirection="row" columnGap={1} flexWrap="wrap">
+          {/* Back to the strip: the engine's close mark is small and far off, and nothing else in the pane closes it. */}
+          {outlined(Box, Button, "smaller", "smaller", () => { void $.ui.close({ id: PANE }); })}
           {list.length > 1 ? outlined(Box, Button, "prev", "‹ prev", step(-1)) : null}
           {list.length > 1 ? outlined(Box, Button, "next", "next ›", step(1)) : null}
           {canOpen && (shot.path || shot.copy) ? outlined(Box, Button, "open", "open", () => { void openShot($, shot); }, "primary") : null}

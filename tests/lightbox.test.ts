@@ -255,3 +255,15 @@ test("what the mods after Lightbox draw in the band stays under the strip", PIXE
   expect((await short.find({ type: "Image" }))?.props?.rows).toBe(1);
   await short.unmount();
 });
+
+test("the larger view closes from its smaller key, back to the strip", PIXELS, async ($, on) => {
+  const w = world(on, { "/work/a.png": 0 });
+  const closed: string[] = [];
+  on("ui.close", ($, e) => { closed.push(e.id); return { value: undefined } as any; });
+  await $.tool.call({ tool: "mcp__lightbox__show", path: "a.png" } as any);
+  await w.settle();
+  const pane = await $.ui.mount(PANE);
+  await $.ui.press({ plugin: "lightbox", key: "smaller" });
+  expect(closed).toEqual(["lightbox"]);
+  await pane.unmount();
+});
